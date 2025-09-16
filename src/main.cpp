@@ -21,7 +21,6 @@
 #include "driver/usb_serial_jtag.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
-#include "esp_check.h"
 #include "esp_random.h"
 
 enum DRAW_COMMDAND { 
@@ -90,7 +89,7 @@ void checkButtonDeferred(void* pvParams){
     int gpio_num;
     static int64_t last_time = esp_timer_get_time()/1000;
     while(true){
-        status = xQueueReceive(buttonQueue, &gpio_num, pdMS_TO_TICKS(1000));
+        status = xQueueReceive(buttonQueue, &gpio_num, pdMS_TO_TICKS(10));
         int64_t current_time = esp_timer_get_time()/1000;
         if(current_time - last_time > 150){ //deboucing
             last_time = current_time;
@@ -147,13 +146,13 @@ void do_display(void *pvParameter)
 
     WriteText("DEMO", sizeof("DEMO")/sizeof(char), 40, 40, ColorRatio(1,1,1), ColorRatio(0,0,0));
     WriteText("PROGRAM", sizeof("PROGRAM")/sizeof(char), 40, 60, ColorRatio(1,1,1), ColorRatio(0,0,0));
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(10));
     clearDisplay();
 
     draw_command_t command;
     
     while(1) {
-        if(xQueueReceive(commandQueue, (void*)&command, pdMS_TO_TICKS(1000))){
+        if(xQueueReceive(commandQueue, (void*)&command, pdMS_TO_TICKS(10))){
             switch(command.draw_type){
                 case RECTANGLE:
                     DrawRect(command.start_coord.x, command.start_coord.y, command.end_coord.x, command.end_coord.y, command.color);
@@ -197,6 +196,7 @@ static void select_app(void *pvParams)
     }
 
     xSemaphoreGive(screensave_sem_handle);
+    uint8_t running = 0; // 0 -> screen_save, 1 -> snake
     while (true) {
         int len = usb_serial_jtag_read_bytes(data, (20), portMAX_DELAY);
         if (len) {
@@ -204,16 +204,18 @@ static void select_app(void *pvParams)
             ets_printf("DATA:%s\n",data);
             draw_command_t command = {0};
             command.draw_type = CLEAR;
-            if(strcmp((char*)data,"start") == 0){
+            if(running == 0 && strcmp((char*)data,"start") == 0){
                 ets_printf("started!\n");
                 xSemaphoreGive(snake_sem_handle);
                 xSemaphoreTake(screensave_sem_handle, portMAX_DELAY);
-                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(1000));
-            }else if(strcmp((char*)data, "exit") == 0){
+                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(10)); //let do display preempt this;
+                running = 1;
+            }else if(running == 1 && strcmp((char*)data, "exit") == 0){
                 ets_printf("exitted!\n");
                 xSemaphoreGive(screensave_sem_handle);
                 xSemaphoreTake(snake_sem_handle, portMAX_DELAY);
-                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(1000));
+                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(10));
+                running = 0;
             }
             usb_serial_jtag_write_bytes((const char *) data, len, portMAX_DELAY);
         }
@@ -235,8 +237,8 @@ void screen_saver(void* pvParameter){
             continue;
         }
         command.draw_type = ELLIPSE;
-        populate_draw_cmd(&command, ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize, ellipsePosY + ellipseSize, ColorRatio(0,0,0));
-        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+        // populate_draw_cmd(&command, ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize, ellipsePosY + ellipseSize, ColorRatio(0,0,0));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
         if(ellipsePosX < 0 || ellipsePosX > max_width - ellipseSize){
             ellipseVeloX *= -1;
             ellipsePosX += ellipseVeloX;
@@ -248,7 +250,7 @@ void screen_saver(void* pvParameter){
         ellipsePosX += ellipseVeloX;
         ellipsePosY+= ellipseVeloY;
         populate_draw_cmd(&command, ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize, ellipsePosY + ellipseSize, ColorRatio(r, g, b));
-        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
         xSemaphoreGive(screensave_sem_handle);
         vTaskDelay(10);
     }
@@ -294,7 +296,7 @@ void snakeGame(void *pvParameter){
             cur_food.x = esp_random() % boardsize_x;
             cur_food.y = esp_random() % boardsize_y;
             command.draw_type = CLEAR;
-            xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+            xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
             xSemaphoreGive(snake_sem_handle);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
@@ -305,12 +307,12 @@ void snakeGame(void *pvParameter){
         populate_draw_cmd(&command, cur_food.x * gridSize, cur_food.y * gridSize, 
             (cur_food.x + 1) * gridSize - 1, (cur_food.y + 1) * gridSize - 1, ColorRatio(1,0,0));
 
-        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
 
         populate_draw_cmd(&command, snake[head_ind].x * gridSize, snake[head_ind].y * gridSize,
         (snake[head_ind].x + 1) * gridSize - 1, (snake[head_ind].y + 1) * gridSize - 1, ColorRatio(1,1,1));
 
-        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
 
         //if hit food
         if(cur_head.x == cur_food.x && cur_head.y == cur_food.y){
@@ -320,7 +322,7 @@ void snakeGame(void *pvParameter){
         }else{
             populate_draw_cmd(&command, snake[tail_ind].x * gridSize, snake[tail_ind].y * gridSize,
             (snake[tail_ind].x + 1) * gridSize - 1, (snake[tail_ind].y + 1) * gridSize - 1, ColorRatio(0,0,0));
-            xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
+            xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(10));
             tail_ind = (tail_ind + 1) % 100;
         }
         xSemaphoreGive(snake_sem_handle);
