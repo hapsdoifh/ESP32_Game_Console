@@ -46,11 +46,10 @@ typedef struct draw_command{
 const int boardsize_x = 32;
 const int boardsize_y = 40;
 
-int dirSelect = 0; 
+int dirSelect = 4; 
 
 // static portMUX_TYPE mySpinlock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t commandQueue;
-
 static QueueHandle_t buttonQueue;
 
 bool button_5_pressed = false;
@@ -64,8 +63,10 @@ static TaskHandle_t screensave_handle;
 static SemaphoreHandle_t snake_sem_handle;
 static SemaphoreHandle_t screensave_sem_handle;
 
-void IRAM_ATTR onButton(void *pvParams){
+static SemaphoreHandle_t resource_mut;
 
+void IRAM_ATTR onButton(void *pvParams){
+    ets_printf("onbutton\n");
     int gpio_num = (int)(int*)pvParams;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xQueueSendFromISR(buttonQueue, (void*)&gpio_num, &xHigherPriorityTaskWoken);
@@ -87,50 +88,56 @@ static void populate_draw_cmd(draw_command_t* cmd_p, int x0, int y0, int x1, int
 void checkButtonDeferred(void* pvParams){
     BaseType_t status;
     int gpio_num;
-    static int64_t last_time = esp_timer_get_time()/1000;
+    int64_t last_time = esp_timer_get_time()/1000;
+    int last_press = 0;
     while(true){
-        status = xQueueReceive(buttonQueue, &gpio_num, pdMS_TO_TICKS(10));
+        status = xQueueReceive(buttonQueue, &gpio_num, pdMS_TO_TICKS(500));
         int64_t current_time = esp_timer_get_time()/1000;
-        if(current_time - last_time > 150){ //deboucing
+        if(current_time - last_time > 100 || last_press != gpio_num){ //deboucing
             last_time = current_time;
         }else{
             continue;
         }
         if(status == errQUEUE_EMPTY)
             continue;
-        switch(gpio_num){ //in this order from top to bottom: up, down, left, right 
-            case 21:
-                ets_printf("button is 21\n");
-                r=1-r;
-                g=1-g;
-                button_21_pressed = false;
-                dirSelect = 1;
-            break;
-            case 7:
-                ets_printf("button is 7\n");
-                r=1-r;
-                g=1-g;
-                button_7_pressed = false;
-                dirSelect = 0;
-            break;
-            case 6:
-                ets_printf("button is 5\n"); 
-                r=1-r;
-                b=1-b;
-                button_6_pressed = false;
-                dirSelect = 2;
-            break;
-            case 5:
-                ets_printf("button is 6\n");
-                r=1-r;
-                g=1-g;
-                button_5_pressed = false;
-                dirSelect = 3;
-            break;
-            default:
-            break;
-
-        }
+        last_press = gpio_num; 
+        //shouldn't block because this task has highest prority, in case semaphore is already taken should be fine with priority inheritance
+        if(xSemaphoreTake(resource_mut, 10) == pdTRUE){
+            switch(gpio_num){ //in this order from top to bottom: up, down, left, right 
+                case 21:
+                    ets_printf("button is 21\n");
+                    r=1-r;
+                    g=1-g;
+                    button_21_pressed = false;
+                    dirSelect = 1;
+                break;
+                case 7:
+                    ets_printf("button is 7\n");
+                    r=1-r;
+                    g=1-g;
+                    button_7_pressed = false;
+                    dirSelect = 0;
+                break;
+                case 6:
+                    ets_printf("button is 5\n"); 
+                    r=1-r;
+                    b=1-b;
+                    button_6_pressed = false;
+                    dirSelect = 2;
+                break;
+                case 5:
+                    ets_printf("button is 6\n");
+                    r=1-r;
+                    g=1-g;
+                    button_5_pressed = false;
+                    dirSelect = 3;
+                break;
+                default:
+                break;
+            }
+        }   
+        xSemaphoreGive(resource_mut);
+        vTaskDelay(10);
     }
 
 }
@@ -144,9 +151,9 @@ void do_display(void *pvParameter)
     DrawLine(0,80,127,80,ColorRatio(0.2, 0.3, 0.4));
     DrawEllipse(0,0,127,159,ColorRatio(1, 0, 0));
 
-    WriteText("DEMO", sizeof("DEMO")/sizeof(char), 40, 40, ColorRatio(1,1,1), ColorRatio(0,0,0));
+    WriteText("DEMO", sizeof("DEMO")/sizeof(char), 50, 40, ColorRatio(1,1,1), ColorRatio(0,0,0));
     WriteText("PROGRAM", sizeof("PROGRAM")/sizeof(char), 40, 60, ColorRatio(1,1,1), ColorRatio(0,0,0));
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(1000));
     clearDisplay();
 
     draw_command_t command;
@@ -186,12 +193,11 @@ static void select_app(void *pvParams)
         .rx_buffer_size = BUF_SIZE,
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_serial_jtag_config));
-    ESP_LOGI("usb_serial_jtag echo", "USB_SERIAL_JTAG init done");
+    ESP_LOGI("app select", "USB_SERIAL_JTAG init done");
 
-    // configure temporary buffer for the incoming data
     uint8_t *data = (uint8_t *) malloc(BUF_SIZE);
     if (data == NULL) {
-        ESP_LOGE("usb_serial_jtag echo", "no memory for data");
+        ESP_LOGE("app select", "no memory for data");
         return;
     }
 
@@ -204,20 +210,21 @@ static void select_app(void *pvParams)
             ets_printf("DATA:%s\n",data);
             draw_command_t command = {0};
             command.draw_type = CLEAR;
-            if(running == 0 && strcmp((char*)data,"start") == 0){
-                ets_printf("started!\n");
+            //allow do_display to preempt this:
+            if(running == 0 && strcmp((char*)data,"snake") == 0){
+                ets_printf("started snake!\n");
                 xSemaphoreGive(snake_sem_handle);
                 xSemaphoreTake(screensave_sem_handle, portMAX_DELAY);
-                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(10)); //let do display preempt this;
+                xQueueSend(commandQueue, &command, pdMS_TO_TICKS(10)); 
                 running = 1;
-            }else if(running == 1 && strcmp((char*)data, "exit") == 0){
-                ets_printf("exitted!\n");
+            }else if(running == 1 && strcmp((char*)data, "screensave") == 0){
+                ets_printf("started screen save!\n");
                 xSemaphoreGive(screensave_sem_handle);
                 xSemaphoreTake(snake_sem_handle, portMAX_DELAY);
                 xQueueSend(commandQueue, &command, pdMS_TO_TICKS(10));
                 running = 0;
             }
-            usb_serial_jtag_write_bytes((const char *) data, len, portMAX_DELAY);
+            // usb_serial_jtag_write_bytes((const char *) data, len, portMAX_DELAY);
         }
         vTaskDelay(1000 / 5);
     }
@@ -263,7 +270,7 @@ void snakeGame(void *pvParameter){
     int tail_ind = 0;
     int foodX = esp_random() % boardsize_x;
     int foodY = esp_random() % boardsize_y;
-    int direction[4][2] = {{0,1},{0,-1},{-1,0},{1,0}}; 
+    int direction[5][2] = {{0,1},{0,-1},{-1,0},{1,0}, {0,0}}; 
     
     snake[0].x = boardsize_x / 2;
     snake[0].y = boardsize_y / 2;
@@ -275,6 +282,7 @@ void snakeGame(void *pvParameter){
     int gridSize = D_HEIGHT / boardsize_x;
 
     draw_command_t command = {0};
+    bool gameover = false;
   
     while(true){
         uint32_t code;
@@ -283,11 +291,28 @@ void snakeGame(void *pvParameter){
             continue;
         }
         command.draw_type = FILLED_RECTANGLE;
-        cur_head.x += direction[dirSelect][0];
-        cur_head.y += direction[dirSelect][1];
+        xSemaphoreTake(resource_mut, portMAX_DELAY);
+            cur_head.x += direction[dirSelect][0];
+            cur_head.y += direction[dirSelect][1];
+        xSemaphoreGive(resource_mut);
+        //check for game over
         if(cur_head.x < 0 || cur_head.x >= boardsize_x || cur_head.y < 0 || cur_head.y >= boardsize_y){
-            //game over
+            gameover = true;
+        }else{
+            for(int i = 0; i < len - 1; i++){
+                int actual_ind = (tail_ind + i) % 100;
+                if(snake[actual_ind].x == snake[head_ind].x && snake[actual_ind].y == snake[head_ind].y){
+                    gameover = true;
+                    break;
+                }
+            }
+        }
+        if(gameover){
+            gameover = false;
             len = 1;
+            xSemaphoreTake(resource_mut, portMAX_DELAY);
+                dirSelect = 4;
+            xSemaphoreGive(resource_mut);
             snake[0].x = boardsize_x / 2;
             snake[0].y = boardsize_y / 2;
             cur_head = snake[0];
@@ -301,6 +326,7 @@ void snakeGame(void *pvParameter){
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
         }
+
         //send to display   
         head_ind = (head_ind + 1) % 100;
         snake[head_ind] = cur_head;
@@ -357,8 +383,7 @@ extern "C" void app_main()
     buttonQueue = xQueueCreate(8, sizeof(int));
     snake_sem_handle = xSemaphoreCreateBinary();
     screensave_sem_handle = xSemaphoreCreateBinary();
-    // xSemaphoreGive(snake_sem_handle);
-    // xSemaphoreGive(screensave_sem_handle);
+    resource_mut = xSemaphoreCreateMutex();
     xTaskCreate(&do_display, "do disp", 2048,NULL,5,NULL);
     xTaskCreate(&checkButtonDeferred, "check button", 2048,NULL,6,NULL);
     xTaskCreate(&select_app, "app selector", 4096, NULL, 4, NULL);
