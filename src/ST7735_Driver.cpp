@@ -11,8 +11,6 @@
 #include "ST7735_Driver.h"
 #include "driver/gpio.h"
 
-// static SPI_HandleTypeDef *DisplayHandle;
-
 spi_device_handle_t DisplayHandle;
 
 int max_width = D_WIDTH;
@@ -68,26 +66,21 @@ void HWReset(){
 void esp32_specific_setup(){
     spi_bus_config_t buscfg = {
         .mosi_io_num = 10,
+        .miso_io_num = -1,
         .sclk_io_num = 8,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = D_WIDTH * D_HEIGHT * 2 + 8
     };
-    // buscfg.mosi_io_num = 10;
-    // buscfg.sclk_io_num = 8;
-    buscfg.miso_io_num = -1;
-    // buscfg.quadwp_io_num = -1;
-    // buscfg.quadhd_io_num = -1;
-    // buscfg.max_transfer_sz = D_WIDTH * D_HEIGHT * 2 + 8;
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
     // Configure SPI device for the LCD
     spi_device_interface_config_t devcfg = {
-        .mode = 0,                          // SPI mode 0
-        .clock_speed_hz = 40 * 1000 * 1000, // 10 MHz
-        .queue_size = 7,                    // Transaction queue size
-        .pre_cb = NULL,                     // Pre-transaction callback
-        .post_cb = NULL,                     // Post-transaction callback
+        .mode = 0,                          
+        .clock_speed_hz = 60 * 1000 * 1000, // 60 MHz
+        .queue_size = 20,                   
+        .pre_cb = NULL,                     // no pre-transaction callback
+        .post_cb = NULL,                     // no post-transaction callback
     };
     devcfg.spics_io_num = CS_PIN;
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &DisplayHandle));
@@ -131,8 +124,8 @@ void DisplayInit(spi_device_handle_t* hspi){
 	};
 	unsigned char Instruction = 0;
 	while(Instruction < sizeof(InitSequence)/sizeof(char)){
-	WriteCommand(InitSequence[Instruction + 1], &InitSequence[Instruction + 2], InitSequence[Instruction]-1);
-	Instruction += InitSequence[Instruction] + 1;
+        WriteCommand(InitSequence[Instruction + 1], &InitSequence[Instruction + 2], InitSequence[Instruction]-1);
+        Instruction += InitSequence[Instruction] + 1;
 	}
 	clearDisplay();
 
@@ -219,6 +212,7 @@ void DrawEllipse(int StartX, int StartY, int EndX, int EndY, int Color, int mapp
         defau_map = mapping;
     }else{
         DrawEllipse(StartX, StartY, EndX, EndY, Color, 1 - defau_map);
+        return;
     }
     int opp_map = 1 - defau_map;
     for(int i = 0; i <= Cycles[defau_map]; i++){
@@ -238,6 +232,16 @@ void DrawEllipse(int StartX, int StartY, int EndX, int EndY, int Color, int mapp
               DrawPixel(XCoord, YCoord, Color, 2);
         }
     }
+}
+
+void DrawRectFilled(int StartX, int StartY, int EndX, int EndY, uint16_t color){
+	SetAddr(StartX, StartY, EndX, EndY);
+	WriteCommand(RAMWR);
+    int rectSize = abs((EndX - StartX) * (EndY - StartY));
+    uint8_t data[] = {static_cast<uint8_t>((color & 0xFF00) >> 8),  static_cast<uint8_t>(color & 0xFF)};
+	for(int i = 0; i < rectSize * 2; i++){
+		spi_transmit_wrapper((uint8_t*)&data, 2);
+	}
 }
 
 void DrawCharacter(char Character, int StartX, int StartY, uint16_t ForegndColor, uint16_t BckgndColor){
@@ -272,14 +276,14 @@ void DrawImage(uint16_t image[]){
 	}
 }
 
-unsigned int GenColor(unsigned int R, unsigned int G, unsigned int B){
+uint32_t GenColor(unsigned int R, unsigned int G, unsigned int B){
     R = R <= 0x1F ? R : 0x1F;
     G = G <= 0x3F ? G : 0x3F;
     B = B <= 0x1F ? B : 0x1F;
     return((R<<11) + (G<<5) + B);
 }
 
-unsigned int ColorRatio(float R, float G, float B){
+uint32_t ColorRatio(float R, float G, float B){
     R = R <= 1.0 ? R : 1.0;
     G = G <= 1.0 ? G : 1.0;
     B = B <= 1.0 ? B : 1.0;

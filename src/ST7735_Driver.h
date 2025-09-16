@@ -47,9 +47,9 @@ void DisplayInit(spi_device_handle_t* hspi);
 
 void WriteCommand(unsigned char Command, unsigned char* Params, unsigned char NumParams);
 
-unsigned int GenColor(unsigned int R, unsigned int G, unsigned int B);
+uint32_t GenColor(unsigned int R, unsigned int G, unsigned int B);
 
-unsigned int ColorRatio(float R, float G, float B);
+uint32_t ColorRatio(float R, float G, float B);
 
 void DrawLine(int StartX, int StartY, int EndX, int EndY, unsigned int Color);
 
@@ -64,6 +64,8 @@ void WriteText(char* text, int length, int StartX, int StartY, uint16_t ForegndC
 void DrawImage(uint16_t image[]);
 
 void clearDisplay();
+
+void DrawRectFilled(int StartX, int StartY, int EndX, int EndY, uint16_t color);
 #endif /* INC_ST7735_DRIVER_H_ */
 
 
