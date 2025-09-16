@@ -34,10 +34,10 @@ typedef struct coords{
 } coords_t;
 
 typedef struct draw_command{
-    uint8_t draw_type;
     coords_t start_coord;
     coords_t end_coord;
     int color;
+    uint8_t draw_type;
 } draw_command_t;
 
 const int boardSize = 32;
@@ -66,6 +66,14 @@ void IRAM_ATTR onButton(void *pvParams){
 }
 
 int r=1,g=1,b=1;
+
+static void populate_draw_cmd(draw_command_t* cmd_p, int x0, int y0, int x1, int y1, unsigned int color){
+    cmd_p->start_coord.x = x0;
+    cmd_p->start_coord.y = y0;
+    cmd_p->end_coord.x = x1;
+    cmd_p->end_coord.y = y1;
+    cmd_p->color = color;
+} 
 
 void checkButtonDeferred(void* pvParams){
     while(true){
@@ -178,14 +186,17 @@ static void echo_task(void *arg)
     }
 }
 
-void splash_screen(void* pvParameter){
+void screen_saver(void* pvParameter){
     int ellipsePosX = 0;
     int ellipsePosY = 0;
     int ellipseVeloX = 1;
     int ellipseVeloY = 1;
     int ellipseSize = 5;
+    draw_command_t command = {0};
     while(true){
-        DrawEllipse(ellipsePosX,ellipsePosY,ellipsePosX + ellipseSize,ellipsePosY + ellipseSize,ColorRatio(0, 0, 0));
+        populate_draw_cmd(&command, ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize, ellipsePosY + ellipseSize, ColorRatio(0,0,0));
+        // DrawEllipse(ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize,ellipsePosY + ellipseSize,ColorRatio(0, 0, 0));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
         if(ellipsePosX < 0 || ellipsePosX > max_width - ellipseSize){
             ellipseVeloX *= -1;
             ellipsePosX += ellipseVeloX;
@@ -197,7 +208,9 @@ void splash_screen(void* pvParameter){
         ellipsePosX += ellipseVeloX;
         ellipsePosY+= ellipseVeloY;
         vTaskDelay(2);
-        DrawEllipse(ellipsePosX,ellipsePosY,ellipsePosX + ellipseSize,ellipsePosY + ellipseSize,ColorRatio(r, g, b));
+        populate_draw_cmd(&command, ellipsePosX, ellipsePosY, ellipsePosX + ellipseSize, ellipsePosY + ellipseSize, ColorRatio(r, g, b));
+        // DrawEllipse(ellipsePosX,ellipsePosY,ellipsePosX + ellipseSize,ellipsePosY + ellipseSize,ColorRatio(r, g, b));
+        xQueueSend(commandQueue, (void*)&command, pdMS_TO_TICKS(1000));
     }
 }
 
