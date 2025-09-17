@@ -77,7 +77,7 @@ void esp32_specific_setup(){
     // Configure SPI device for the LCD
     spi_device_interface_config_t devcfg = {
         .mode = 0,                          
-        .clock_speed_hz = 60 * 1000 * 1000, // 60 MHz
+        .clock_speed_hz = 15 * 1000 * 1000, // 15 MHz is max speed for ST7735:page 25 -> 66ns min cycle
         .queue_size = 20,                   
         .pre_cb = NULL,                     // no pre-transaction callback
         .post_cb = NULL,                     // no post-transaction callback
@@ -125,6 +125,8 @@ void DisplayInit(spi_device_handle_t* hspi){
 	unsigned char Instruction = 0;
 	while(Instruction < sizeof(InitSequence)/sizeof(char)){
         WriteCommand(InitSequence[Instruction + 1], &InitSequence[Instruction + 2], InitSequence[Instruction]-1);
+        if(Instruction == 0)
+            vTaskDelay(pdMS_TO_TICKS(2)); // needs to wait at least 150ms for soft reset
         Instruction += InitSequence[Instruction] + 1;
 	}
 	clearDisplay();
